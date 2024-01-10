@@ -28,15 +28,16 @@
     typedef struct LED_t {
       const uint8_t PIN;
       bool          display_state;
-      int8_t        flash_time;
+      int16_t       flash_time;         // in ms
+      unsigned long last_switch;
       bool          active;
     } LED;
 
-    LED start_btn_led = {START_BTN_PIN, false, -1, false};
-    LED led2          = {LED_2_PIN,     false, -1, false};
-    LED led3          = {LED_3_PIN,     false, -1, false};
-    LED led4          = {LED_4_PIN,     false, -1, false};
-    LED led5          = {LED_5_PIN,     false, -1, false};
+    LED start_btn_led = {START_BTN_PIN, false, NO_FLASH,    0, true};
+    LED led2          = {LED_2_PIN,     false, FAST_FLASH,  0, true};
+    LED led3          = {LED_3_PIN,     false, FAST_FLASH,  0, true};
+    LED led4          = {LED_4_PIN,     false, MED_FLASH,   0, true};
+    LED led5          = {LED_5_PIN,     false, SLOW_FLASH,  0, true};
 
     LED *all_leds[LED_LIST_SIZE] = {&start_btn_led, &led2, &led3, &led4, &led5};
 
@@ -49,15 +50,61 @@
 void setup_io(){
   pinMode(LED_BUILTIN, OUTPUT);
 
+  // Setup Output & Turn LED on
   for(int i =0; i < LED_LIST_SIZE; i++){
     pinMode(all_leds[i] -> PIN, OUTPUT);
     digitalWrite(all_leds[i] -> PIN, HIGH);
   }
 
+  // Turn off LED (end the light show)
   for(int i =0; i < LED_LIST_SIZE; i++){
     digitalWrite(all_leds[i] -> PIN, LOW);
     delay(500);
   }
+}
+
+static void update_outputs_task(void *arg){
+
+  ESP_LOGI(BASE_TAG, "OUTPUT Task Started");
+
+    while(1){
+
+        // Output bool logic
+        for(int i =0; i < LED_LIST_SIZE; i++){
+
+          // Check if the LED should just be off
+          if(! all_leds[i] -> active){
+            all_leds[i] -> display_state = false;
+            continue;
+          }
+
+          else{
+            // Check if this is a flashing LED
+            if (all_leds[i] -> flash_time > 0){
+              if(millis() - all_leds[i] -> last_switch > all_leds[i] -> flash_time){
+                all_leds[i] -> display_state = !all_leds[i] -> display_state;
+                all_leds[i] -> last_switch = millis();
+              }
+            }
+            else{
+              all_leds[i] -> display_state = true;
+            }
+          }
+        }
+
+        
+        // Actually update the output pin
+        for(int i =0; i < LED_LIST_SIZE; i++){
+          digitalWrite(all_leds[i] -> PIN, all_leds[i] -> display_state);
+        }
+        
+        printf("ds:%d ft:%d ls:%d \n", all_leds[0] -> display_state, all_leds[0] -> flash_time, all_leds[0] -> last_switch);
+        
+        vTaskDelay(pdMS_TO_TICKS(5));  // 5 ms
+    }
+
+    vTaskDelete(NULL);
+
 }
 
 
@@ -69,9 +116,9 @@ static void twai_receive_task(void *arg){
 
     while(1){
 
-        if (twai_receive(&message, portMAX_DELAY) == ESP_OK); // NOTE: possibly decrease this delay later
+        if (twai_receive(&message, pdMS_TO_TICKS(5)) == ESP_OK); // NOTE: possibly decrease this delay later
         else {
-            printf("\nFailed to receive message\n");
+            // printf("\nFailed to receive message\n");
             vTaskDelay(1);
             continue;
         }
@@ -106,11 +153,11 @@ void app_main(void){
 
     // Create Semaphore(s)
     rx_sem = xSemaphoreCreateBinary();  
-    tx_sem = xSemaphoreCreateBinary();  
+    // tx_sem = xSemaphoreCreateBinary();  
 
     // CREATE THREADS (TASKS)
     xTaskCreatePinnedToCore(twai_receive_task,    "TWAI_rx",        4096, NULL, RX_TASK_PRIO,     NULL, tskNO_AFFINITY);
-    // xTaskCreatePinnedToCore(twai_transmit_task,   "TWAI_tx",        4096, NULL, TX_TASK_PRIO,     NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(update_outputs_task,   "TWAI_out",      4096, NULL, OUTPUT_TASK_PRIO,    NULL, tskNO_AFFINITY);
 
     // Install and start TWAI driver            -   This will force the ESP32 to restart if there is a CAN error - good
     ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
@@ -119,11 +166,11 @@ void app_main(void){
     ESP_LOGI(BASE_TAG, "CAN Driver started");
 
     xSemaphoreGive(rx_sem);                     // Allow Start of RX task   
-    xSemaphoreGive(tx_sem);                     // Allow Start of TX task
+    // xSemaphoreGive(tx_sem);                     // Allow Start of TX task
     vTaskDelay(pdMS_TO_TICKS(100));             
     
     xSemaphoreTake(rx_sem, portMAX_DELAY);      // Wait for RX Task to complete (never ;) )
-    xSemaphoreTake(tx_sem, portMAX_DELAY);      // Wait for TX task to complete (never ;) )
+    // xSemaphoreTake(tx_sem, portMAX_DELAY);      // Wait for TX task to complete (never ;) )
     printf("\nEXITING\n");                      // (we will NEVER reach this line)
 
     //Stop and uninstall TWAI driver            // Just incase tho

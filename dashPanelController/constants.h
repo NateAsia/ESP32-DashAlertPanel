@@ -50,6 +50,13 @@
     #define LED_LIST_SIZE     5
 
     #define START_BTN_MASK    0b00000001
+
+
+    // Flash Speeds
+      #define NO_FLASH      0       // ms
+      #define FAST_FLASH    250     // ms
+      #define MED_FLASH     500     // ms
+      #define SLOW_FLASH    1000    // ms
     
 
 
