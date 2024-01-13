@@ -13,17 +13,19 @@
 
   #include "constants.h"
 
-  static const twai_filter_config_t   f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(); // TODO: FILTER
+  static const twai_filter_config_t   f_config = {
+                                                    .acceptance_code  = (DASH_INPUT_ID << 21),
+                                                    .acceptance_mask  = ~(TWAI_STD_ID_MASK << 21),
+                                                    .single_filter    = true
+                                                  };
   static const twai_timing_config_t   t_config = TWAI_TIMING_CONFIG_1MBITS();     // CAN SPEED 
-  static const twai_general_config_t  g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)TX_GPIO_NUM, (gpio_num_t)RX_GPIO_NUM, TWAI_MODE_NO_ACK);
+  static const twai_general_config_t  g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)TX_GPIO_NUM, (gpio_num_t)RX_GPIO_NUM, TWAI_MODE_LISTEN_ONLY);        // could use TWAI_MODE_NO_ACK is we want it to talk back
 
   static SemaphoreHandle_t rx_sem;
   static SemaphoreHandle_t tx_sem;
 
 
 /* --------------------- DYNAMIC VARIABLES (I/O Status) ------------------ */
-
-
   // LEDS
     typedef struct LED_t {
       const uint8_t PIN;
@@ -31,15 +33,20 @@
       int16_t       flash_time;         // in ms
       unsigned long last_switch;
       bool          active;
+      bool          analog;
     } LED;
 
-    LED start_btn_led = {START_BTN_PIN, false, NO_FLASH,    0, true};
-    LED led2          = {LED_2_PIN,     false, FAST_FLASH,  0, true};
-    LED led3          = {LED_3_PIN,     false, FAST_FLASH,  0, true};
-    LED led4          = {LED_4_PIN,     false, MED_FLASH,   0, true};
-    LED led5          = {LED_5_PIN,     false, SLOW_FLASH,  0, true};
+    LED start_btn_led = {START_BTN_PIN,     false, SLOW_FLASH,  0, true, true};
+    LED drs_led       = {DRS_LED_PIN,       false, NO_FLASH,    0, true, false};
+    LED bspd_led      = {BSPD_LED_PIN,      false, FAST_FLASH,  0, true, false};
+    LED bots_led      = {BOTS_LED_PIN,      false, FAST_FLASH,  0, true, false};
+    LED selection_led = {SELECTION_LED_PIN, false, MED_FLASH,   0, true, false};
 
-    LED *all_leds[LED_LIST_SIZE] = {&start_btn_led, &led2, &led3, &led4, &led5};
+    LED *all_leds[LED_LIST_SIZE] = {&start_btn_led, &drs_led, &bspd_led, &bots_led, &selection_led};
+
+  // Used for fading the LEDs
+    uint8_t aVal = 0;
+    int8_t aDir = LED_FADE_SPEED;
 
   // CAN
     twai_message_t message;         // CAN Message Struct
@@ -54,13 +61,24 @@ void setup_io(){
   for(int i =0; i < LED_LIST_SIZE; i++){
     pinMode(all_leds[i] -> PIN, OUTPUT);
     digitalWrite(all_leds[i] -> PIN, HIGH);
+    delay(100);
   }
 
   // Turn off LED (end the light show)
   for(int i =0; i < LED_LIST_SIZE; i++){
     digitalWrite(all_leds[i] -> PIN, LOW);
-    delay(500);
+    delay(100);
   }
+}
+
+void update_fading(){
+    if (aVal >= 255){
+      aDir = -1 * abs(aDir);
+    }
+    else if (aVal <= 0){
+      aDir = abs(aDir);
+    }
+    aVal += aDir;
 }
 
 static void update_outputs_task(void *arg){
@@ -79,8 +97,8 @@ static void update_outputs_task(void *arg){
           }
 
           else{
-            // Check if this is a flashing LED
-            if (all_leds[i] -> flash_time > 0){
+            // Check if this is a flashing LED & not in analog mode
+            if (all_leds[i] -> flash_time > 0 && !all_leds[i] -> analog){
               if(millis() - all_leds[i] -> last_switch > all_leds[i] -> flash_time){
                 all_leds[i] -> display_state = !all_leds[i] -> display_state;
                 all_leds[i] -> last_switch = millis();
@@ -95,10 +113,17 @@ static void update_outputs_task(void *arg){
         
         // Actually update the output pin
         for(int i =0; i < LED_LIST_SIZE; i++){
-          digitalWrite(all_leds[i] -> PIN, all_leds[i] -> display_state);
+          if(all_leds[i] -> analog && all_leds[i] -> display_state){
+            analogWrite(all_leds[i] -> PIN, aVal);
+          }
+          else
+            digitalWrite(all_leds[i] -> PIN, all_leds[i] -> display_state);
         }
         
-        printf("ds:%d ft:%d ls:%d \n", all_leds[0] -> display_state, all_leds[0] -> flash_time, all_leds[0] -> last_switch);
+
+        update_fading();
+
+        // printf("ds:%d ft:%d ls:%d \n", all_leds[0] -> display_state, all_leds[0] -> flash_time, all_leds[0] -> last_switch);
         
         vTaskDelay(pdMS_TO_TICKS(5));  // 5 ms
     }
@@ -107,8 +132,6 @@ static void update_outputs_task(void *arg){
 
 }
 
-
-
 static void twai_receive_task(void *arg){
 
     xSemaphoreTake(rx_sem, portMAX_DELAY);
@@ -116,7 +139,7 @@ static void twai_receive_task(void *arg){
 
     while(1){
 
-        if (twai_receive(&message, pdMS_TO_TICKS(5)) == ESP_OK); // NOTE: possibly decrease this delay later
+        if (twai_receive(&message, pdMS_TO_TICKS(5)) == ESP_OK); 
         else {
             // printf("\nFailed to receive message\n");
             vTaskDelay(1);
@@ -138,7 +161,13 @@ static void twai_receive_task(void *arg){
 
         //Process received message
         if(message.identifier == DASH_INPUT_ID){
-          start_btn_led.active = message.data[0] & START_BTN_MASK;
+          drs_led.active        = message.data[2] & DRS_MASK;
+          bspd_led.active       = message.data[2] & BSPD_MASK;
+          bots_led.active       = message.data[2] & BOTS_MASK;
+          selection_led.active  = message.data[2] & SELECTION_MASK;
+
+          start_btn_led.active = (message.data[0] < ENGINE_ON_SPEED) ;    // Only have the start button illumnated when the engine is not running
+          
         }
         
         vTaskDelay(1); 
@@ -157,7 +186,7 @@ void app_main(void){
 
     // CREATE THREADS (TASKS)
     xTaskCreatePinnedToCore(twai_receive_task,    "TWAI_rx",        4096, NULL, RX_TASK_PRIO,     NULL, tskNO_AFFINITY);
-    xTaskCreatePinnedToCore(update_outputs_task,   "TWAI_out",      4096, NULL, OUTPUT_TASK_PRIO,    NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(update_outputs_task,   "TWAI_out",      4096, NULL, OUTPUT_TASK_PRIO, NULL, tskNO_AFFINITY);
 
     // Install and start TWAI driver            -   This will force the ESP32 to restart if there is a CAN error - good
     ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));

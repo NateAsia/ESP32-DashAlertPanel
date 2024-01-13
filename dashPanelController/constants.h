@@ -23,11 +23,11 @@
 
 
 /* --------------------- TWAI / CAN Transceiver Setup ------------------ */
-  #define TX_GPIO_NUM     8          // "TX2" on the ESP32-WROOM-32
-  #define RX_GPIO_NUM     9          // "RX2" on the ESP32-WROOM-32
+  #define TX_GPIO_NUM     D10          
+  #define RX_GPIO_NUM     D9          
 
-  #define DASH_INPUT_ID    0x000          // From the C185 or steering wheel
-  // #define DRS_OUTPUT_ID   0x000          // To ECU (or back to the C185 first)
+  #define DASH_INPUT_ID    0x660          // From the C185 or steering wheel
+  // #define DRS_OUTPUT_ID 0x000          // To ECU (or back to the C185 first)
 
 
 /* --------------------- DASH-C IO ------------------ */
@@ -43,13 +43,26 @@
     #define WALKY_TALK    D4
     
     
-    #define START_BTN_PIN LED_1_PIN
+    #define START_BTN_PIN     LED_1_PIN
+    #define DRS_LED_PIN       LED_2_PIN
+    #define BSPD_LED_PIN      LED_3_PIN
+    #define BOTS_LED_PIN      LED_4_PIN
+    #define SELECTION_LED_PIN LED_5_PIN
 
 /* --------------------- Logic Code ------------------ */
 
     #define LED_LIST_SIZE     5
+    #define LED_FADE_SPEED    3
 
-    #define START_BTN_MASK    0b00000001
+    // LOGIC
+      #define ENGINE_ON_SPEED   700   // RPMs
+
+    // BIT BASKS
+      #define DRS_MASK          (1 << 7)
+      #define BSPD_MASK         (1 << 6)
+      #define BOTS_MASK         (1 << 5)
+      #define SELECTION_MASK    (1 << 4)
+      // #define START_BTN_MASK    0b00000001
 
 
     // Flash Speeds
